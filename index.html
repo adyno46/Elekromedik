@@ -95,12 +95,12 @@ input,select{width:100%;font:inherit;padding:6px;border:1px solid #aaa;border-ra
   <form class="login-card" onsubmit="return doLogin(event)">
     <h2>LOGIN ADMIN</h2>
     <p>Aplikasi Lembar Kerja Preventive Maintenance Alat Medis</p>
-    <label for="loginUser">Username</label>
-    <input id="loginUser" autocomplete="username" required placeholder="Masukkan username">
-    <label for="loginPass">Password</label>
-    <input id="loginPass" type="password" inputmode="numeric" autocomplete="current-password" required placeholder="Masukkan password">
+    <label for="loginUser">Email akun Supabase</label>
+    <input id="loginUser" type="email" autocomplete="username" required placeholder="Masukkan email akun Supabase">
+    <label for="loginPass">Password akun Supabase</label>
+    <input id="loginPass" type="password" autocomplete="current-password" required placeholder="Masukkan password akun Supabase">
     <button type="submit">LOGIN</button>
-    <div class="login-error" id="loginError">Username atau password salah.</div>
+    <div class="login-error" id="loginError">Login gagal. Periksa email, password, dan status Admin.</div>
   </form>
 </div>
 <div class="toolbar-summary no-print" id="toolbarSummary" aria-label="Ringkasan kondisi seluruh alat" style="display:none">
@@ -189,6 +189,7 @@ input,select{width:100%;font:inherit;padding:6px;border:1px solid #aaa;border-ra
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const sample=Array.from({length:12}, (_, i) => {
   const year = new Date().getFullYear();
@@ -216,6 +217,7 @@ tr.children[3].querySelector("input").value
 function addRow(){document.querySelector("#pmTable tbody").insertAdjacentHTML("beforeend",rowHTML([new Date().toISOString().slice(0,10),"Pengecekan fungsi alat","Baik","FANNY"]));updateStats();}
 function removeRow(){const body=document.querySelector("#pmTable tbody");if(body.rows.length<=1){alert("Minimal harus ada 1 baris PM.");return;}body.deleteRow(body.rows.length-1);updateStats();}
 function todayRow(){addRow();let r=document.querySelectorAll("#pmTable tbody tr");r[r.length-1].children[0].querySelector("input").value=new Date().toISOString().slice(0,10);}
+window.currentAlatId = window.currentAlatId || null;
 function updateStats(){let c={"Baik":0,"Dalam Perbaikan":0,"Rusak Berat":0},rows=getRows();rows.forEach(r=>c[r[2]]++);total.textContent=rows.length;baik.textContent=c["Baik"];perbaikan.textContent=c["Dalam Perbaikan"];rusak.textContent=c["Rusak Berat"];}
 function updateToolbarEquipmentStats(){
   let db=[];
@@ -244,7 +246,9 @@ function data(){
   const tipe=(document.getElementById("type")?.value||"").trim();
   const nomorSeri=(document.getElementById("seri")?.value||"").trim();
   const rows=getRows();
+  if(!window.currentAlatId) window.currentAlatId=(crypto && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16);});
   return {
+    id:window.currentAlatId,
     aplikasi:"Lembar Kerja Preventive Maintenance Alat Medis",
     nama:namaAlat, nama_alat:namaAlat,
     merk:merek, merek:merek,
@@ -313,12 +317,12 @@ function showQR(){
   img.src=urls[0];area.appendChild(img);
 }
 function qrURLPayload(d){
-  let payload=textPayload(d);
+  // QR memakai URL stabil berdasarkan ID; halaman publik mengambil data terbaru dari Supabase.
   if(/^https?:$/.test(location.protocol)){
-    const base=location.href.split('#')[0];
-    payload=base+'#pdfdata='+encodeURIComponent(encodeBase64Unicode(JSON.stringify(d)));
+    const url=new URL(location.href); url.hash=''; url.search='';
+    url.searchParams.set('alat',d.id); return url.toString();
   }
-  return payload;
+  return textPayload(d);
 }
 function closeQR(){document.getElementById("qrModal").classList.remove("show");}
 function downloadQR(){
@@ -340,6 +344,7 @@ function newWorksheet(){
   const saveCurrent=confirm("Simpan lembar kerja yang sedang dibuka sebelum membuat lembar kerja baru? Tekan Batal untuk membatalkan.");
   if(saveCurrent){saveData();}
   else if(!confirm("Lanjut membuat lembar kerja baru tanpa menyimpan perubahan terakhir? Data yang sudah tersimpan tetap dipertahankan.")){return;}
+  window.currentAlatId=(crypto && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16);});
   document.getElementById("nama").value="";
   document.getElementById("merk").value="";
   document.getElementById("type").value="";
@@ -357,18 +362,23 @@ function newWorksheet(){
   window.scrollTo({top:0,behavior:"smooth"});
   alert(`Lembar kerja baru siap diisi untuk tahun ${year}, dengan 12 baris PM (Januari–Desember), satu baris setiap bulan. Kegiatan PM otomatis terisi “Pengecekan fungsi alat”. Sesuaikan tanggal pemeriksaan, lalu tekan Simpan.`);
 }
-function saveData(){
+async function saveData(){
   const d=data();
-  localStorage.setItem("PM_MEDIS",JSON.stringify(d));
+  const key=String(d.no_seri||"").trim().toLowerCase() || [d.nama_alat,d.merek,d.tipe,d.lokasi].join("|").toLowerCase();
   let db=[];
   try{db=JSON.parse(localStorage.getItem("PM_MEDIS_DATABASE")||"[]");if(!Array.isArray(db))db=[];}catch(e){db=[];}
-  // Nomor seri menjadi kunci utama; jika kosong, gunakan gabungan identitas alat.
-  const key=String(d.no_seri||"").trim().toLowerCase() || [d.nama_alat,d.merek,d.tipe,d.lokasi].join("|").toLowerCase();
-  const idx=db.findIndex(x=>(String(x.no_seri||"").trim().toLowerCase() || [x.nama_alat||x.nama,x.merek||x.merk,x.tipe||x.type,x.lokasi].join("|").toLowerCase())===key);
-  if(idx>=0) db[idx]=d; else db.push(d);
+  const idx=db.findIndex(x=>x.id===d.id || (String(x.no_seri||x.sn||x.seri||"").trim().toLowerCase() || [x.nama_alat||x.nama,x.merek||x.merk,x.tipe||x.type,x.lokasi].join("|").toLowerCase())===key);
+  if(idx>=0) db[idx]={...db[idx],...d}; else db.push(d);
+  localStorage.setItem("PM_MEDIS",JSON.stringify(d));
   localStorage.setItem("PM_MEDIS_DATABASE",JSON.stringify(db));
   updateToolbarEquipmentStats();
-  alert("Data PM tersimpan. Data alat ini tersedia di pencarian perangkat ini.");
+  if(!pmSupabase){alert("Data tersimpan di perangkat ini, tetapi Supabase belum terhubung.");return;}
+  const {data:{session},error:sessionError}=await pmSupabase.auth.getSession();
+  if(sessionError || !session){alert("Data tersimpan di perangkat ini, tetapi sesi Supabase tidak aktif. Login kembali untuk menyimpan online.");return;}
+  const row={id:d.id,nama_alat:d.nama_alat||d.nama||'',merek:d.merek||d.merk||'',tipe:d.tipe||d.type||'',no_seri:d.no_seri||d.sn||d.seri||'',kalibrasi:d.kalibrasi||null,kondisi_alat:d.kondisi_alat||'Baik',lokasi:d.lokasi||'',teknisi:d.teknisi||'FANNY JOSEPH',pm:Array.isArray(d.pm)?d.pm:[],is_public:true,updated_at:new Date().toISOString()};
+  const {error}=await pmSupabase.from('alat_pm').upsert(row,{onConflict:'id'});
+  if(error){alert('Data tersimpan di perangkat, tetapi GAGAL ke Supabase: '+error.message+'\nPeriksa apakah SQL Supabase sudah dijalankan.');return;}
+  alert('BERHASIL: data alat dan riwayat PM tersimpan di Supabase dan dapat dimuat dari perangkat lain.');
 }
 
 function exportEquipmentCSV(){
@@ -441,6 +451,7 @@ function loadPMRecord(encoded){
   closeQR();
   let d;
   try{d=JSON.parse(decodeURIComponent(encoded));}catch(e){alert('Data tidak dapat dibuka.');return;}
+  window.currentAlatId=d.id||d.alat_id||((crypto && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16);}));
   document.getElementById('nama').value=d.nama_alat||d.nama||'';
   document.getElementById('merk').value=d.merek||d.merk||'';
   document.getElementById('type').value=d.tipe||d.type||'';
@@ -474,50 +485,119 @@ const normalizedSample = sample.map(r => {
 });
 if(!openQRPDFFromHash()){render(normalizedSample);}
 
-// Login sederhana di sisi browser: username admin, password 00000.
-function doLogin(event){
+// Login Admin menggunakan Supabase Auth dan verifikasi role melalui public.is_pm_admin().
+const SUPABASE_URL = "https://lurcrjewwjeeehapwthq.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_l8rjEvUcd3ja4yT9F4rX1w_pFTDNs8-";
+const pmSupabase = window.supabase?.createClient
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+  : null;
+
+function showAdminUI(){
+  document.getElementById("loginOverlay").style.display="none";
+  document.getElementById("mainToolbar").style.display="flex";
+  document.getElementById("toolbarSummary").style.display="grid";
+  updateToolbarEquipmentStats();
+  loadSupabaseRecords();
+}
+function showLoginUI(message){
+  document.getElementById("mainToolbar").style.display="none";
+  document.getElementById("toolbarSummary").style.display="none";
+  document.getElementById("loginOverlay").style.display="flex";
+  const err=document.getElementById("loginError");
+  if(message){err.textContent=message;err.style.display="block";}
+  else{err.style.display="none";}
+}
+async function verifyPMAdmin(){
+  if(!pmSupabase) throw new Error("Pustaka Supabase tidak berhasil dimuat. Periksa koneksi internet.");
+  const {data:{user},error:userError}=await pmSupabase.auth.getUser();
+  if(userError) throw userError;
+  if(!user) return false;
+  const {data,error:rpcError}=await pmSupabase.rpc("is_pm_admin");
+  if(rpcError) throw rpcError;
+  return data === true;
+}
+async function doLogin(event){
   event.preventDefault();
-  const user=document.getElementById("loginUser").value.trim();
-  const pass=document.getElementById("loginPass").value;
-  if(user==="admin" && pass==="00000"){
-    sessionStorage.setItem("PM_ADMIN_LOGIN","1");
-    document.getElementById("loginOverlay").style.display="none";
-    document.getElementById("mainToolbar").style.display="flex";
-    document.getElementById("toolbarSummary").style.display="grid";
-    updateToolbarEquipmentStats();
-    document.getElementById("loginError").style.display="none";
-  }else{
-    document.getElementById("loginError").style.display="block";
+  const email=document.getElementById("loginUser").value.trim();
+  const password=document.getElementById("loginPass").value;
+  const button=document.querySelector(".login-card button[type='submit']");
+  const err=document.getElementById("loginError");
+  button.disabled=true;
+  button.textContent="Memeriksa...";
+  err.style.display="none";
+  try{
+    if(!pmSupabase) throw new Error("Pustaka Supabase tidak berhasil dimuat. Periksa koneksi internet.");
+    const {error}=await pmSupabase.auth.signInWithPassword({email,password});
+    if(error) throw error;
+    const isAdmin=await verifyPMAdmin();
+    if(!isAdmin){
+      await pmSupabase.auth.signOut();
+      throw new Error("Login berhasil, tetapi akun ini belum terverifikasi sebagai Admin PM.");
+    }
+    showAdminUI();
+    document.getElementById("loginPass").value="";
+  }catch(e){
+    err.textContent=e?.message || "Login gagal. Periksa email dan password akun Supabase.";
+    err.style.display="block";
+  }finally{
+    button.disabled=false;
+    button.textContent="LOGIN";
   }
   return false;
 }
-function kembaliKeLembarPM(){
-  // Setiap kembali ke lembar PM, minta login admin lagi.
-  sessionStorage.removeItem("PM_ADMIN_LOGIN");
-  document.getElementById("mainToolbar").style.display="none";
-  document.getElementById("toolbarSummary").style.display="none";
-  document.getElementById("loginOverlay").style.display="flex";
+async function kembaliKeLembarPM(){
+  try{if(pmSupabase) await pmSupabase.auth.signOut();}catch(e){}
+  showLoginUI();
   document.getElementById("loginPass").value="";
-  document.getElementById("loginError").style.display="none";
   window.scrollTo(0,0);
 }
-function logout(){
-  sessionStorage.removeItem("PM_ADMIN_LOGIN");
-  document.getElementById("mainToolbar").style.display="none";
-  document.getElementById("toolbarSummary").style.display="none";
-  document.getElementById("loginOverlay").style.display="flex";
+async function logout(){
+  try{if(pmSupabase) await pmSupabase.auth.signOut();}catch(e){}
+  showLoginUI();
   document.getElementById("loginPass").value="";
 }
-function restoreLogin(){
-  if(sessionStorage.getItem("PM_ADMIN_LOGIN")==="1"){
-    document.getElementById("loginOverlay").style.display="none";
-    document.getElementById("mainToolbar").style.display="flex";
-    document.getElementById("toolbarSummary").style.display="grid";
-    updateToolbarEquipmentStats();
+async function restoreLogin(){
+  try{
+    if(!pmSupabase){showLoginUI("Pustaka Supabase tidak berhasil dimuat. Periksa koneksi internet.");return;}
+    const {data:{session},error}=await pmSupabase.auth.getSession();
+    if(error) throw error;
+    if(!session){showLoginUI();return;}
+    if(await verifyPMAdmin()) showAdminUI();
+    else{
+      await pmSupabase.auth.signOut();
+      showLoginUI("Sesi ditemukan, tetapi akun ini belum terverifikasi sebagai Admin PM.");
+    }
+  }catch(e){
+    showLoginUI("Tidak dapat memverifikasi sesi Admin: "+(e?.message||"kesalahan koneksi"));
   }
 }
+async function renderPublicAlatPage(id){
+  document.body.innerHTML='<main style="font-family:Arial,sans-serif;max-width:900px;margin:auto;padding:20px"><h2>DATA ALAT MEDIS</h2><p>Memuat data terbaru...</p></main>';
+  if(!pmSupabase){document.body.innerHTML='<main style="font-family:Arial,sans-serif;padding:24px"><h2>Data belum tersedia</h2><p>Koneksi Supabase belum siap.</p></main>';return;}
+  const {data:r,error}=await pmSupabase.from('alat_pm').select('id,nama_alat,merek,tipe,no_seri,kalibrasi,kondisi_alat,lokasi,teknisi,pm,updated_at,is_public').eq('id',id).eq('is_public',true).maybeSingle();
+  if(error||!r){document.body.innerHTML='<main style="font-family:Arial,sans-serif;padding:24px"><h2>Data alat tidak ditemukan</h2><p>Simpan data alat di Supabase terlebih dahulu, lalu buat QR kembali.</p></main>';return;}
+  const d={id:r.id,nama:r.nama_alat,nama_alat:r.nama_alat,merk:r.merek,merek:r.merek,type:r.tipe,tipe:r.tipe,seri:r.no_seri,sn:r.no_seri,no_seri:r.no_seri,kalibrasi:r.kalibrasi||'',kondisi_alat:r.kondisi_alat||'Baik',lokasi:r.lokasi||'',teknisi:r.teknisi||'FANNY JOSEPH',pm:Array.isArray(r.pm)?r.pm:[]};
+  document.body.innerHTML=makePDFHTML(d).replace('<div class="actions"><button onclick="window.print()">Cetak / Simpan PDF</button></div>','<div class="actions"><button onclick="window.print()">Cetak / Simpan PDF</button></div><p style="text-align:center;font-size:11px;color:#667">Data terbaru dari Supabase • Diperbarui: '+esc(new Date(r.updated_at).toLocaleString('id-ID'))+'</p>');
+  document.title='Data Alat Medis - '+(d.nama_alat||d.nama);
+}
+const pmPublicAlatId=new URLSearchParams(location.search).get('alat');
+if(pmPublicAlatId) renderPublicAlatPage(pmPublicAlatId);
+else if(!location.hash.includes("pdfdata=")) restoreLogin();
 
-if(!location.hash.includes("pdfdata=")) restoreLogin();
+async function loadSupabaseRecords(){
+  if(!pmSupabase) return;
+  const {data:rows,error}=await pmSupabase.from('alat_pm').select('*').order('updated_at',{ascending:false});
+  if(error){console.error('Gagal memuat Supabase:',error.message);alert('Login berhasil, tetapi data Supabase belum dapat dimuat: '+error.message+'\nJalankan SQL database yang disertakan.');return;}
+  const mapped=(rows||[]).map(r=>({id:r.id,alat_id:r.id,nama:r.nama_alat,nama_alat:r.nama_alat,merk:r.merek,merek:r.merek,type:r.tipe,tipe:r.tipe,seri:r.no_seri,sn:r.no_seri,no_seri:r.no_seri,kalibrasi:r.kalibrasi||'',kondisi_alat:r.kondisi_alat||'Baik',lokasi:r.lokasi||'',teknisi:r.teknisi||'FANNY JOSEPH',pm:Array.isArray(r.pm)?r.pm:[],updated_at:r.updated_at}));
+  // Pertahankan catatan lama yang hanya ada di browser; rekaman Supabase menang bila SN sama.
+  let local=[];try{local=JSON.parse(localStorage.getItem('PM_MEDIS_DATABASE')||'[]');if(!Array.isArray(local))local=[];}catch(e){local=[];}
+  const recKey=d=>String(d.no_seri||d.sn||d.seri||'').trim().toLowerCase()||[d.nama_alat||d.nama,d.merek||d.merk,d.tipe||d.type,d.lokasi].map(v=>String(v||'').trim().toLowerCase()).join('|');
+  const combined=new Map();local.forEach(d=>combined.set(recKey(d),d));mapped.forEach(d=>combined.set(recKey(d),d));
+  localStorage.setItem('PM_MEDIS_DATABASE',JSON.stringify([...combined.values()]));
+  updateToolbarEquipmentStats();
+  const q=document.getElementById('searchTool');
+  if(q && document.getElementById('searchBar').style.display==='block') searchPM();
+}
 
 function refreshQROnEdit(){
   const modal=document.getElementById("qrModal");
